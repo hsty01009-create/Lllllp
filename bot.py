@@ -1,10 +1,22 @@
 import json
 import requests
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
 
-BOT_TOKEN = "PUT_BOT_TOKEN"
-HF_TOKEN = "PUT_HF_TOKEN"
+BOT_TOKEN = "توکن واقعی BotFather"
+HF_TOKEN = "توکن واقعی HuggingFace"
+
 
 IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 MUSIC_MODEL = "facebook/musicgen-small"
@@ -28,115 +40,125 @@ def save_db(db):
 db = load_db()
 
 
+# ---------- UI BUTTONS ----------
 def main_menu():
-    return ReplyKeyboardMarkup(
-        [["🖼 ساخت عکس", "🎵 ساخت موزیک"]],
-        resize_keyboard=True
-    )
+    keyboard = [
+        [InlineKeyboardButton("🖼 ساخت عکس", callback_data="img")],
+        [InlineKeyboardButton("🎵 ساخت موزیک", callback_data="music")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
+def agree_menu():
+    keyboard = [
+        [InlineKeyboardButton("✅ قبول قوانین", callback_data="agree")],
+        [InlineKeyboardButton("❌ رد قوانین", callback_data="reject")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+# ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
 
     if user_id not in db["users"]:
-        db["users"][user_id] = {"accepted": False, "warn": 0}
+        db["users"][user_id] = {"accepted": False}
         save_db(db)
 
-    keyboard = [["✅ قبول قوانین", "❌ رد قوانین"]]
-
     await update.message.reply_text(
-        "📜 قوانین:\n"
+        "📜 قوانین ربات:\n"
         "1. استفاده مسئولیت خود کاربر است\n"
-        "2. محتوای غیرقانونی ممنوع\n"
-        "3. سازنده: امیر علی فروزان اصل\n\n"
+        "2. سازنده: امیر علی فروزان اصل\n\n"
         "آیا قبول می‌کنید؟",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        reply_markup=agree_menu()
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    text = update.message.text
+# ---------- BUTTON HANDLER ----------
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = str(query.from_user.id)
 
-    if user_id not in db["users"]:
-        await start(update, context)
-        return
+    await query.answer()
 
-    # قبول قوانین
-    if text == "✅ قبول قوانین":
+    if query.data == "agree":
         db["users"][user_id]["accepted"] = True
         save_db(db)
 
-        await update.message.reply_text(
+        await query.message.edit_text(
             "✅ خوش آمدید!",
             reply_markup=main_menu()
         )
-        return
 
-    # رد قوانین
-    if text == "❌ رد قوانین":
-        await update.message.reply_text("⛔ بدون پذیرش قوانین نمی‌توانید استفاده کنید.")
-        return
+    elif query.data == "reject":
+        await query.message.edit_text("⛔ بدون قبول قوانین نمی‌توانید استفاده کنید")
 
-    # چک قوانین
-    if not db["users"][user_id]["accepted"]:
+    elif query.data == "img":
+        await query.message.reply_text("🖼 متن بده برای ساخت عکس:")
+
+    elif query.data == "music":
+        await query.message.reply_text("🎵 متن بده برای ساخت موزیک:")
+
+
+# ---------- IMAGE ----------
+def generate_image(prompt):
+    url = f"https://api-inference.huggingface.co/models/{IMAGE_MODEL}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+    r = requests.post(url, headers=headers, json={"inputs": prompt})
+    return r.content if r.status_code == 200 else None
+
+
+# ---------- MUSIC ----------
+def generate_music(prompt):
+    url = f"https://api-inference.huggingface.co/models/{MUSIC_MODEL}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+    r = requests.post(url, headers=headers, json={"inputs": prompt})
+
+    if r.status_code == 200:
+        with open("music.mp3", "wb") as f:
+            f.write(r.content)
+        return "music.mp3"
+    return None
+
+
+# ---------- TEXT HANDLER ----------
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    text = update.message.text
+
+    if user_id not in db["users"] or not db["users"][user_id]["accepted"]:
         await update.message.reply_text("اول قوانین را قبول کنید ❗")
         return
 
-    # ساخت عکس
-    if text.startswith("🖼 ساخت عکس"):
-        prompt = text.replace("🖼 ساخت عکس", "").strip()
-
-        if not prompt:
-            await update.message.reply_text("متن بده مثلا: 🖼 ساخت عکس یک ماشین در شب")
-            return
-
+    if text.startswith("🖼"):
+        prompt = text.replace("🖼", "").strip()
         await update.message.reply_text("⏳ در حال ساخت عکس...")
 
-        url = f"https://api-inference.huggingface.co/models/{IMAGE_MODEL}"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-
-        response = requests.post(url, headers=headers, json={"inputs": prompt})
-
-        if response.status_code == 200:
-            await update.message.reply_photo(response.content)
+        img = generate_image(prompt)
+        if img:
+            await update.message.reply_photo(photo=img)
         else:
             await update.message.reply_text("❌ خطا در ساخت عکس")
-        return
 
-    # ساخت موزیک (پاسخ ساده)
-    if text.startswith("🎵 ساخت موزیک"):
-        prompt = text.replace("🎵 ساخت موزیک", "").strip()
-
-        if not prompt:
-            await update.message.reply_text("مثلا: 🎵 ساخت موزیک آرام")
-            return
-
+    elif text.startswith("🎵"):
+        prompt = text.replace("🎵", "").strip()
         await update.message.reply_text("⏳ در حال ساخت موزیک...")
 
-        url = f"https://api-inference.huggingface.co/models/{MUSIC_MODEL}"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-
-        response = requests.post(url, headers=headers, json={"inputs": prompt})
-
-        if response.status_code == 200:
-            with open("music.wav", "wb") as f:
-                f.write(response.content)
-
-            await update.message.reply_audio(audio=open("music.wav", "rb"))
+        file = generate_music(prompt)
+        if file:
+            await update.message.reply_audio(audio=open(file, "rb"))
         else:
             await update.message.reply_text("❌ خطا در ساخت موزیک")
 
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+# ---------- MAIN ----------
+app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(button))
+app.add_handler(MessageHandler(filters.TEXT, handle_text))
 
-    print("Bot is running...")
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+print("Bot is running...")
+app.run_polling()
